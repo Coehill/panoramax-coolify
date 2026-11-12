@@ -48,6 +48,8 @@ services:
       # Placeholders in keycloak-realm.json
       GEOVISIO_BASE_URL: https://${DOMAIN:?}
       GEOVISIO_CLIENT_SECRET: ${SERVICE_PASSWORD_64_OAUTHCLIENTSECRET}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
       KC_DB_USERNAME: keycloak_user
       KC_DB_PASSWORD: ${SERVICE_PASSWORD_64_KCDBPASSWORD}
       KC_DB_SCHEMA: keycloak
@@ -63,8 +65,8 @@ services:
       - "traefik.enable=false"
     environment:
       # Keycloak admin account
-      KC_BOOTSTRAP_KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
 
       # Database connection
       # note: keycloak uses the same database as geovisio, in a separate schema, this way there is only 1 database to backup

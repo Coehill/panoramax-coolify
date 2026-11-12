@@ -272,7 +272,7 @@ Alternatively, you can do it via command:
 ```bash
 docker exec -it <auth_container_name> sh -c '
 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080/oauth --realm master \
-  --user admin --password "$KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD"
+  --user admin --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"
 CID=$(/opt/keycloak/bin/kcadm.sh get clients -r geovisio -q clientId=geovisio --fields id --format csv --noquotes | tail -1)
 /opt/keycloak/bin/kcadm.sh update clients/$CID -r geovisio -s "rootUrl=https://<new-domain>"
 '
@@ -395,7 +395,7 @@ Its output is hex (only digits and `a`–`f`, no symbols at all), so the same va
 | `OAUTH_CLIENT_SECRET` (`SERVICE_PASSWORD_64_OAUTHCLIENTSECRET`)            | Keycloak `geovisio` client (realm import, one-time)  | **Yes** — update it in Keycloak *and* the env var, in sync (§7.2)  |
 | `PG_PASSWORD` (`SERVICE_PASSWORD_64_PGPASSWORD`)                           | Postgres `gvs` role (set at first DB init only)      | **Yes** — `ALTER USER gvs …` in the DB (§7.3)                      |
 | `KC_DB_PASSWORD` (`SERVICE_PASSWORD_64_KCDBPASSWORD`)                      | Postgres `keycloak_user` role (first DB init only)   | **Yes** — `ALTER USER keycloak_user …` in the DB (§7.3)            |
-| `KEYCLOAK_ADMIN_PASSWORD` (`SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD`)    | Keycloak master-realm admin user (first `auth` boot) | **Yes** — reset inside Keycloak; env var alone does nothing (§7.4) |
+| `KEYCLOAK_ADMIN_PASSWORD` (`SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD`)    | Keycloak master-realm admin user (first `keycloak-import` run) | **Yes** — reset inside Keycloak; env var alone does nothing (§7.4) |
 | `RESTIC_PASSWORD`                                                          | the encryption of the entire restic repo             | **Yes, critical** — re-key the repo *before* the env var (§7.5)    |
 | Production S3 keys (in `FS_TMP_URL`/`FS_PERMANENT_URL`/`FS_DERIVATES_URL`) | nothing in the DB                                    | Rotate at vendor, update all three URLs (§7.6)                     |
 | Backup S3 keys (`BACKUP_S3_ACCESS_KEY`/`BACKUP_S3_SECRET_KEY`)             | nothing in the DB                                    | Rotate at vendor, update both vars (§7.6)                          |
@@ -419,7 +419,7 @@ Or via `kcadm.sh`, reusing the pattern from §6 step 2:
 ```bash
 docker exec -it <auth_container_name> sh -c '
 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080/oauth --realm master \
-  --user "$KC_BOOTSTRAP_KEYCLOAK_ADMIN" --password "$KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD"
+  --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"
 CID=$(/opt/keycloak/bin/kcadm.sh get clients -r geovisio -q clientId=geovisio --fields id --format csv --noquotes | tail -1)
 /opt/keycloak/bin/kcadm.sh update clients/$CID -r geovisio -s "secret=<NEW_SECRET>"
 '
@@ -452,7 +452,7 @@ The simplest correct approach is to update the value and redeploy the whole stac
 
 ### 7.4 `KEYCLOAK_ADMIN_PASSWORD`
 
-The Keycloak master-realm admin password is bootstrapped into the DB the first time `auth` starts (from `KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD`) and then hashed and stored. Changing the env var afterward has **no effect** on the stored password — you must reset it inside Keycloak.
+The Keycloak master-realm admin password is bootstrapped into the DB when `keycloak-import` first initialises the master realm (from `KC_BOOTSTRAP_ADMIN_PASSWORD`) and then hashed and stored. Changing the env var afterward has **no effect** on the stored password — you must reset it inside Keycloak.
 
 Via the Keycloak Admin Console (master realm): Users → the admin user (`admin` by default) → **Credentials** → **Reset password** → set a new one (untick "Temporary").
 
@@ -461,8 +461,8 @@ Or via `kcadm.sh`:
 ```bash
 docker exec -it <auth_container_name> sh -c '
 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080/oauth --realm master \
-  --user "$KC_BOOTSTRAP_KEYCLOAK_ADMIN" --password "$KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD"
-/opt/keycloak/bin/kcadm.sh set-password -r master --username "$KC_BOOTSTRAP_KEYCLOAK_ADMIN" --new-password "<NEW_ADMIN_PASSWORD>"
+  --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD"
+/opt/keycloak/bin/kcadm.sh set-password -r master --username "$KC_BOOTSTRAP_ADMIN_USERNAME" --new-password "<NEW_ADMIN_PASSWORD>"
 '
 ```
 
