@@ -54,6 +54,7 @@ services:
       KC_DB_PASSWORD: ${SERVICE_PASSWORD_64_KCDBPASSWORD}
       KC_DB_SCHEMA: keycloak
       KC_DB_URL: jdbc:postgresql://db/geovisio
+      KC_SPI_CONNECTIONS_JPA__QUARKUS__MIGRATION_STRATEGY: update
     depends_on:
       db:
         condition: service_healthy
