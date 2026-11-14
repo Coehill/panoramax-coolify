@@ -24,7 +24,7 @@ Platform behaviours that aren't documented upstream and that this repo's compose
 
 **Coolify's Docker Compose buildpack injects every app-level environment variable into every service**, not just the ones that reference it. A variable meant for one container is visible in all of them, which can collide with another image's own conventions — a `PGHOST` intended for `backup` broke the `db` service's init script this way. Variables in that situation are hardcoded per-service in `docker-compose.yml` rather than exposed in the Coolify UI.
 
-**Coolify restarts unhealthy containers on a shorter timeout than compose's `start_period`.** Restarts were observed at ~23–29s against a configured 60s `start_period`, so a service that is slow to become *ready* gets killed and restarted before it ever passes. Healthchecks here are liveness checks (`auth`'s is a bare TCP connect), not readiness checks.
+**Coolify restarts unhealthy containers on a shorter timeout than compose's `start_period`.** Restarts were observed at ~23–29s against a configured 60s `start_period`, so a service that is slow to become *ready* gets killed and restarted before it ever passes. Keep anything slow out of a healthchecked service's startup: this is why the Keycloak realm import runs in the one-shot `keycloak-import` rather than in `auth`. With the import moved out, `auth` can use upstream's readiness check (`/oauth/health/ready`). If it ever restart-loops on Coolify, fall back to a bare TCP connect on port 8080.
 
 **A `{` or `}` inside a `${VAR:-default}` breaks the build.** Coolify's compose parser reads part of a brace-containing default as a *second* variable name and emits it as a build argument — `--build-arg "color": "#abcdef", …` — whose unbalanced quotes kill the build command with `bash: -c: line 1: unexpected EOF while looking for matching '"'`. Colons and dashes are fine; several URL defaults and `CC-BY-SA-4.0` rely on that. This is why the JSON punctuation of `API_SUMMARY` lives literally in `docker-compose.yml` instead of in a default.
 
@@ -35,14 +35,19 @@ Platform behaviours that aren't documented upstream and that this repo's compose
 Related upstream bugs for the three behaviours above: [coollabsio/coolify#8851](https://github.com/coollabsio/coolify/issues/8851), [#3674](https://github.com/coollabsio/coolify/issues/3674), [#7542](https://github.com/coollabsio/coolify/issues/7542).
 
 
+## Upstream behaviours to know
+
+**Upstream renamed only one of the `*_DERIVATES_*` variables, and the API doesn't read the new spelling yet.** 2.16.1 renamed `FS_DERIVATES_URL` to `FS_DERIVATIVES_URL`. As of 2.17.0, though, `geovisio/config_app.py` copies only the *old* name from the environment into the app config, so a container given only `FS_DERIVATIVES_URL` fails to start. `API_DERIVATES_PICTURES_PUBLIC_URL` and `PICTURE_PROCESS_DERIVATES_STRATEGY` were never renamed, and a misspelled copy is silently ignored. `docker-compose.yml` therefore maps the corrected Coolify-facing names onto the spellings the API reads (see [`changes_from_upstream.md`](./changes_from_upstream.md#s3-object-storage)). When syncing a new upstream release, check `confFromEnv` in `config_app.py` before assuming a renamed variable is actually read.
+
+
 ## Validating docker-compose.yml locally
 
 `docker-compose.yml` uses Coolify's `exclude_from_hc` extension field, which isn't part of the Compose Specification — a plain `docker compose config` will reject it as an unknown key. Coolify strips this field server-side before validating; do the same locally. The command below also passes dummy values for the `${VAR:?}` variables the file requires, so it can be copy-pasted and run as-is — no real secrets or `.env` file needed just to check the file parses:
 
 ```bash
 grep -v 'exclude_from_hc' docker/full-keycloak-auth/docker-compose.yml | \
-  DOMAIN=x S3_DERIVATES_PUBLIC_URL=x S3_PERMANENT_PUBLIC_URL=x \
-  FS_TMP_URL=x FS_PERMANENT_URL=x FS_DERIVATES_URL=x \
+  DOMAIN=x S3_DERIVATIVES_PUBLIC_URL=x S3_PERMANENT_PUBLIC_URL=x \
+  FS_TMP_URL=x FS_PERMANENT_URL=x FS_DERIVATIVES_URL=x \
   BACKUP_S3_ENDPOINT=x BACKUP_S3_BUCKET=x BACKUP_S3_ACCESS_KEY=x BACKUP_S3_SECRET_KEY=x \
   RESTIC_PASSWORD=x \
   docker compose -f - config -q
@@ -68,7 +73,7 @@ Once you've reviewed what it reports — ported the changes, or decided they don
 sh scripts/check-upstream.sh --record
 ```
 
-That updates `.upstream-sync`, which records the upstream **commit SHA** last reviewed (plus the date, as human context).
+That updates `.upstream-sync`, which records the upstream **commit SHA** last reviewed, plus, as human context, the upstream release tag pointing at that commit (`none` if the tip isn't a tagged release) and the date. The SHA is what the script compares against; the tag is informational.
 
 **Inspect or pull in a file.** These need the upstream remote configured (the check script does not):
 

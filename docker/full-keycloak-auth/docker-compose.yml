@@ -20,8 +20,19 @@
 x-base-geovisio: &geovisio-default
   image: panoramax/api:${GEOVISIO_IMAGE_TAG:-latest}
 
+# Shared by migrations, api and the workers. All three open the picture storage
+# at startup (migrations too: db-upgrade builds the full app), so all three need
+# the FS_* variables — don't rely on Coolify injecting them.
 x-base-geovisio-env: &geovisio-default-env
   FS_URL: "" # Override the FS_URL default baked into the pre-built image; the split S3 variables are used instead
+  FS_TMP_URL: ${FS_TMP_URL:?}
+  FS_PERMANENT_URL: ${FS_PERMANENT_URL:?}
+  # Upstream (2.16.1) renamed FS_DERIVATES_URL to FS_DERIVATIVES_URL, but API
+  # 2.17.0 still reads only the old spelling from the environment. Pass both,
+  # so this keeps working once upstream reads the new one. See
+  # changes_from_upstream.md (S3 storage).
+  FS_DERIVATES_URL: ${FS_DERIVATIVES_URL:?}
+  FS_DERIVATIVES_URL: ${FS_DERIVATIVES_URL:?}
 
 x-base-keycloak: &keycloak-build
   build:
@@ -45,6 +56,18 @@ services:
     restart: "no"
     exclude_from_hc: true
     environment:
+      # This is the first Keycloak process to touch the DB after an image bump,
+      # so it must apply Keycloak's schema migrations. kc.sh import (non-server
+      # mode) refuses an outdated schema unless told to migrate ("Database not
+      # up-to-date, please enable database migration"), which would block auth
+      # on every Keycloak upgrade.
+      KC_SPI_CONNECTIONS_JPA__QUARKUS__MIGRATION_STRATEGY: update
+      # Keycloak creates the bootstrap admin only while initialising the master
+      # realm — and on a fresh database that happens here, in the import, not in
+      # auth. Without these the instance ends up with no master-realm admin.
+      # auth keeps them too: the kcadm.sh runbook snippets read them there.
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
       # Placeholders in keycloak-realm.json
       GEOVISIO_BASE_URL: https://${DOMAIN:?}
       GEOVISIO_CLIENT_SECRET: ${SERVICE_PASSWORD_64_OAUTHCLIENTSECRET}
@@ -63,8 +86,8 @@ services:
       - "traefik.enable=false"
     environment:
       # Keycloak admin account
-      KC_BOOTSTRAP_KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
-      KC_BOOTSTRAP_KEYCLOAK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
 
       # Database connection
       # note: keycloak uses the same database as geovisio, in a separate schema, this way there is only 1 database to backup
@@ -79,8 +102,6 @@ services:
       KC_HTTP_ENABLED: true
       # trust nginx to set the correct xforwarded headers with the hostname
       KC_HOSTNAME_STRICT: false
-      # Enable health endpoint on management port (9000) at /health/ready
-      KC_HTTP_MANAGEMENT_HEALTH_ENABLED: "true"
 
       # SMTP is not configured here — the realm imports with an empty
       # smtpServer, and email features (password reset, verification) won't
@@ -102,18 +123,15 @@ services:
       keycloak-import:
         condition: service_completed_successfully
     healthcheck:
-      # Health endpoints are not reliably available in this Keycloak 26 build.
-      # This used to send a real GET to /oauth/realms/master and check for a
-      # 200 (proving the DB is up, the realm is loaded, and Keycloak is
-      # actually serving) — but that only succeeds once realm import fully
-      # finishes, and observed startup + import time exceeded some restart
-      # supervisor's timeout on Coolify (well under docker-compose's own
-      # start_period), causing an endless restart loop before the app ever
-      # got a chance to become ready. Downgraded to a bare TCP-connect check,
-      # which succeeds as soon as the port is listening — a liveness check,
-      # not a true readiness check. Dependents (e.g. website) may see a few
-      # seconds of 503s from auth immediately after it's marked healthy.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && exec 3<&-"]
+      # Readiness check, same as upstream: HEAD /oauth/health/ready on the
+      # management port (9000). No curl in the Keycloak image, hence bash's
+      # /dev/tcp. The /oauth prefix is required — the management interface
+      # inherits KC_HTTP_RELATIVE_PATH — so a bare /health/ready always 404s.
+      # This replaced a TCP-connect liveness check that was adopted while realm
+      # import still ran inside auth's own startup and outlasted Coolify's
+      # restart timeout; the import now runs in keycloak-import, so auth comes
+      # up quickly. If auth ever restart-loops on Coolify, suspect this first.
+      test: ["CMD-SHELL", "{ printf 'HEAD /oauth/health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000"]
       timeout: 5s
       interval: 5s
       retries: 5
@@ -197,13 +215,13 @@ services:
       API_PICTURES_LICENSE_SPDX_ID: ${API_PICTURES_LICENSE_SPDX_ID:-CC-BY-SA-4.0}
       API_PICTURES_LICENSE_URL: ${API_PICTURES_LICENSE_URL:-https://spdx.org/licenses/CC-BY-SA-4.0.html}
       API_BLUR_URL: ${BLUR_API:-https://blur.panoramax.openstreetmap.fr}
-      API_DERIVATES_PICTURES_PUBLIC_URL: ${S3_DERIVATES_PUBLIC_URL:?}
+      # These two DERIVATES names were never renamed upstream (only the FS_ one
+      # was, see the anchor above), so the misspelling is deliberate. The
+      # Coolify-facing variable uses the corrected spelling.
+      API_DERIVATES_PICTURES_PUBLIC_URL: ${S3_DERIVATIVES_PUBLIC_URL:?}
       API_PERMANENT_PICTURES_PUBLIC_URL: ${S3_PERMANENT_PUBLIC_URL:?}
       PICTURE_PROCESS_THREADS_LIMIT: 0
       PICTURE_PROCESS_DERIVATES_STRATEGY: PREPROCESS
-      FS_TMP_URL: ${FS_TMP_URL:?}
-      FS_PERMANENT_URL: ${FS_PERMANENT_URL:?}
-      FS_DERIVATES_URL: ${FS_DERIVATES_URL:?}
       NB_API_THREADS: 10
       # Default 2: Traefik (Coolify) + nginx (reverseproxy) both set X-Forwarded-For before reaching the API
       INFRA_NB_PROXIES: ${INFRA_NB_PROXIES:-2}
@@ -276,7 +294,7 @@ services:
     restart: always
 
   # Background workers used to process pictures in the background
-  # calling the blur API and generating derivates (SD picture and tiles for faster rendering in photosphereviewer)
+  # calling the blur API and generating derivatives (SD picture and tiles for faster rendering in photosphereviewer)
   # Several background workers can run together — add or remove numbered services below to adjust the count.
   # Note: the blurring is configured to be done using the OSM-FR service, you can change the variable `API_BLUR_URL` if needed (in the API too).
   background-worker-1: &worker-default
@@ -300,9 +318,6 @@ services:
       <<: *geovisio-default-env
       PICTURE_PROCESS_DERIVATES_STRATEGY: PREPROCESS
       DB_URL: postgres://gvs:${SERVICE_PASSWORD_64_PGPASSWORD}@db/geovisio
-      FS_TMP_URL: ${FS_TMP_URL:?}
-      FS_PERMANENT_URL: ${FS_PERMANENT_URL:?}
-      FS_DERIVATES_URL: ${FS_DERIVATES_URL:?}
       API_BLUR_URL: https://blur.panoramax.openstreetmap.fr
 
   background-worker-2:
@@ -380,6 +395,7 @@ services:
       KC_DB_PASSWORD: ${SERVICE_PASSWORD_64_KCDBPASSWORD}
       KEYCLOAK_ADMIN_PASSWORD: ${SERVICE_PASSWORD_64_KEYCLOAKADMINPASSWORD}
       FS_PERMANENT_URL: ${FS_PERMANENT_URL:?} # reused from the api/background-worker config
+      FS_DERIVATIVES_URL: ${FS_DERIVATIVES_URL:?} # only used by the one-off migrate-derivatives-prefix.sh
       RESTIC_PASSWORD: ${RESTIC_PASSWORD:?}
       RESTIC_REPOSITORY: s3:${BACKUP_S3_ENDPOINT:?}/${BACKUP_S3_BUCKET:?}/restic
       AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY:?} # restic's S3 backend reads these names
